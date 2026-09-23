@@ -211,7 +211,7 @@ class RecommendationServiceTests(unittest.TestCase):
 class CatalogValidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.profiles, _ = load_catalog(BACKEND / "data")
+        cls.profiles, cls.catalog_source = load_catalog(BACKEND / "data")
 
     def test_catalog_records_have_valid_required_fields_dates_and_synthetic_flag(self) -> None:
         self.assertTrue(self.profiles)
@@ -221,6 +221,19 @@ class CatalogValidationTests(unittest.TestCase):
             self.assertIsInstance(profile["categories"], list)
             for busy_day in profile["busy_dates"]:
                 date.fromisoformat(busy_day)
+
+    def test_synthetic_fallback_has_the_documented_catalog_shape(self) -> None:
+        if self.catalog_source != "demo_fallback":
+            self.skipTest("The real source catalog defines its own category distribution")
+        category_counts = {}
+        for profile in self.profiles:
+            for category in profile["categories"]:
+                category_counts[category] = category_counts.get(category, 0) + 1
+        self.assertEqual(len(self.profiles), 66)
+        self.assertTrue(all(profile["synthetic"] for profile in self.profiles))
+        self.assertEqual(category_counts["Ведущий"], 15)
+        self.assertEqual(category_counts["Фотограф"], 12)
+        self.assertEqual(category_counts["Банкетный зал"], 8)
 
     def test_profile_validation_rejects_missing_fields_bad_dates_and_wrong_synthetic_type(self) -> None:
         valid = copy.deepcopy(self.profiles[0])
