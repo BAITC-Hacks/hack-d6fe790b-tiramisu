@@ -1,0 +1,1 @@
+{"id":"fixture-primary","anon_name":"Основной тестовый профиль","categories":["Ведущий"],"city":"Алматы","price_from_kzt":100000,"event_formats":["свадьба"],"languages":["русский"],"max_hours":5,"busy_dates":[],"description":"Тестовый профиль для проверки загрузки каталога.","synthetic":false,"city_imputed":false,"price_imputed":false}

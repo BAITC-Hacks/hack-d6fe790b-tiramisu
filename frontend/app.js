@@ -64,6 +64,30 @@
     return Number.isFinite(number) ? new Intl.NumberFormat('ru-RU').format(number) : '—';
   }
 
+  function formatEventDate(value) {
+    if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return value || 'выбранную дату';
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isNaN(parsed.getTime())
+      ? value
+      : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(parsed);
+  }
+
+  function busyAvailability(data, fallbackCounts = {}) {
+    const summary = data.availability_summary || data.availability || {};
+    const rawCount = summary.busy_excluded
+      ?? summary.busy_on_requested_date
+      ?? summary.busy_count
+      ?? summary.excluded_busy
+      ?? summary.busy
+      ?? fallbackCounts.busy
+      ?? 0;
+    const count = Number(rawCount);
+    return {
+      count: Number.isFinite(count) && count >= 0 ? count : 0,
+      date: summary.date || summary.requested_date || data.requested?.date || controls.date.value,
+    };
+  }
+
   function setState(title, detail, kind = 'info') {
     resultState.replaceChildren();
     resultState.className = `state state--${kind}`;
@@ -149,9 +173,11 @@
 
     for (const profile of results) appendCard(profile);
     const count = Number.isFinite(Number(data.total_eligible)) ? Number(data.total_eligible) : results.length;
+    const availability = busyAvailability(data, counts);
+    const busyDetail = `На ${formatEventDate(availability.date)} по занятости исключено: ${availability.count}.`;
     const detail = count < 3
-      ? `Нашли ${count} ${count === 1 ? 'подходящий вариант' : 'подходящих варианта'}. ${describeRejections(counts, data.requested?.date)}`
-      : `Показаны три подходящих варианта. ${describeRejections(counts, data.requested?.date)}`;
+      ? `Нашли ${count} ${count === 1 ? 'подходящий вариант' : 'подходящих варианта'}. ${busyDetail} ${describeRejections(counts, availability.date)}`
+      : `Показаны три подходящих варианта. ${busyDetail} ${describeRejections(counts, availability.date)}`;
     setState('Подобрали варианты', detail, 'success');
     if (data.degraded) {
       const note = document.createElement('p');

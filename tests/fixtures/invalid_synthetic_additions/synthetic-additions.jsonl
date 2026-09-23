@@ -1,0 +1,1 @@
+{"id":"fixture-invalid-addition","anon_name":"Некорректное дополнение","categories":["Ведущий"],"city":"Алматы","price_from_kzt":100000,"event_formats":["свадьба"],"languages":["русский"],"max_hours":5,"busy_dates":[],"description":"Запись намеренно не имеет синтетического признака.","synthetic":false,"city_imputed":false,"price_imputed":false}
