@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f5f0">
+    <title>Подбор подрядчика — Tiramisu</title>
+    <link rel="stylesheet" href="/frontend/styles.css">
+    <script src="/frontend/app.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <p class="eyebrow">TIRAMISU · EVENT GUIDE</p>
+        <h1>Найдём подрядчика под ваш праздник</h1>
+        <p>Укажите условия заказа — покажем до трёх свободных специалистов и объясним, чем они подходят.</p>
+      </header>
+
+      <section class="search-panel" aria-labelledby="request-title">
+        <div class="section-heading">
+          <p class="eyebrow">ВАШ ЗАПРОС</p>
+          <h2 id="request-title">Что вы планируете?</h2>
+        </div>
+        <form class="request-form" id="request-form" novalidate>
+          <div class="field-row">
+            <div class="field">
+              <label for="city">Город <span aria-hidden="true">*</span></label>
+              <select id="city" name="city" required disabled aria-describedby="city-error">
+                <option value="">Загружаем города…</option>
+              </select>
+              <p class="field-error" id="city-error" aria-live="polite"></p>
+            </div>
+            <div class="field">
+              <label for="date">Дата мероприятия <span aria-hidden="true">*</span></label>
+              <input id="date" name="date" type="date" required disabled aria-describedby="date-error">
+              <p class="field-error" id="date-error" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="event-type">Тип мероприятия <span aria-hidden="true">*</span></label>
+              <select id="event-type" name="event_type" required disabled aria-describedby="event-type-error">
+                <option value="">Загружаем форматы…</option>
+              </select>
+              <p class="field-error" id="event-type-error" aria-live="polite"></p>
+            </div>
+            <div class="field">
+              <label for="category">Категория подрядчика <span aria-hidden="true">*</span></label>
+              <select id="category" name="category" required disabled aria-describedby="category-error">
+                <option value="">Загружаем категории…</option>
+              </select>
+              <p class="field-error" id="category-error" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="budget">Бюджет, ₸ <span aria-hidden="true">*</span></label>
+              <input id="budget" name="budget_kzt" type="number" inputmode="numeric" min="0" step="1" placeholder="Например, 250 000" required aria-describedby="budget-help budget-error">
+              <p class="helper-text" id="budget-help">Максимальная цена «от», которую рассматриваете.</p>
+              <p class="field-error" id="budget-error" aria-live="polite"></p>
+            </div>
+            <div class="field">
+              <label for="duration">Длительность, часов <span class="optional">необязательно</span></label>
+              <input id="duration" name="duration_hours" type="number" inputmode="decimal" min="0.5" max="24" step="0.5" placeholder="Например, 5" aria-describedby="duration-help duration-error">
+              <p class="helper-text" id="duration-help">Оставьте пустым, если длительность не важна.</p>
+              <p class="field-error" id="duration-error" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="language">Язык работы <span class="optional">необязательно</span></label>
+            <select id="language" name="language" disabled aria-describedby="language-help">
+              <option value="">Любой язык</option>
+            </select>
+            <p class="helper-text" id="language-help">Учитываем язык только если вы выберете его.</p>
+          </div>
+
+          <div class="form-actions">
+            <button class="primary-button" id="submit-button" type="submit" disabled>Подобрать подрядчиков</button>
+            <p class="helper-text">Подбор не отправляет заявку подрядчику и ни к чему не обязывает.</p>
+          </div>
+        </form>
+      </section>
+
+      <section class="results-panel" id="results-panel" aria-labelledby="results-title" aria-live="polite" aria-busy="false">
+        <div class="section-heading">
+          <p class="eyebrow">РЕЗУЛЬТАТЫ</p>
+          <h2 id="results-title">Подбор появится здесь</h2>
+        </div>
+        <div class="state" id="result-state" role="status" aria-live="polite">
+          <p>Заполните условия заказа, чтобы увидеть подходящих подрядчиков.</p>
+        </div>
+        <div class="result-list" id="result-list"></div>
+        <div class="form-actions retry-actions" id="retry-actions" hidden>
+          <button class="secondary-button" id="retry-button" type="button">Повторить запрос</button>
+        </div>
+      </section>
+      <footer class="page-footer">Каталог помогает сравнить варианты. Доступность подтверждается подрядчиком.</footer>
+    </main>
+  </body>
+</html>
