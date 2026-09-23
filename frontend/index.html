@@ -14,7 +14,17 @@
         <p class="eyebrow">TIRAMISU · EVENT GUIDE</p>
         <h1>Найдём подрядчика под ваш праздник</h1>
         <p>Укажите условия заказа — покажем до трёх свободных специалистов и объясним, чем они подходят.</p>
+        <p class="catalog-banner" id="catalog-banner" hidden></p>
       </header>
+
+      <section class="demo-panel" id="demo-panel" aria-labelledby="demo-title" hidden>
+        <div class="section-heading">
+          <p class="eyebrow">ДЕМО-ЗАПРОСЫ</p>
+          <h2 id="demo-title">Проверьте сценарии в один клик</h2>
+        </div>
+        <p class="helper-text">Кнопка заполнит форму и сразу выполнит запрос. После этого поля можно изменить вручную.</p>
+        <div class="demo-list" id="demo-list"></div>
+      </section>
 
       <section class="search-panel" aria-labelledby="request-title">
         <div class="section-heading">
@@ -63,7 +73,7 @@
             </div>
             <div class="field">
               <label for="duration">Длительность, часов <span class="optional">необязательно</span></label>
-              <input id="duration" name="duration_hours" type="number" inputmode="decimal" min="0.5" max="24" step="0.5" placeholder="Например, 5" aria-describedby="duration-help duration-error">
+              <input id="duration" name="duration_hours" type="number" inputmode="decimal" min="0" max="24" step="any" placeholder="Например, 5" aria-describedby="duration-help duration-error">
               <p class="helper-text" id="duration-help">Оставьте пустым, если длительность не важна.</p>
               <p class="field-error" id="duration-error" aria-live="polite"></p>
             </div>
@@ -87,11 +97,13 @@
       <section class="results-panel" id="results-panel" aria-labelledby="results-title" aria-live="polite" aria-busy="false">
         <div class="section-heading">
           <p class="eyebrow">РЕЗУЛЬТАТЫ</p>
-          <h2 id="results-title">Подбор появится здесь</h2>
+          <h2 id="results-title">Результаты подбора</h2>
         </div>
         <div class="state" id="result-state" role="status" aria-live="polite">
           <p>Заполните условия заказа, чтобы увидеть подходящих подрядчиков.</p>
         </div>
+        <div class="query-summary" id="query-summary" hidden></div>
+        <p class="ranking-note" id="ranking-note" hidden></p>
         <div class="result-list" id="result-list"></div>
         <div class="form-actions retry-actions" id="retry-actions" hidden>
           <button class="secondary-button" id="retry-button" type="button">Повторить запрос</button>

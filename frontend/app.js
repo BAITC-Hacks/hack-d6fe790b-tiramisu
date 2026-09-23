@@ -1,6 +1,7 @@
 (() => {
   'use strict';
 
+  const TIMEOUT = 10000;
   const form = document.querySelector('#request-form');
   const resultsPanel = document.querySelector('#results-panel');
   const resultState = document.querySelector('#result-state');
@@ -8,6 +9,11 @@
   const retryActions = document.querySelector('#retry-actions');
   const retryButton = document.querySelector('#retry-button');
   const submitButton = document.querySelector('#submit-button');
+  const querySummary = document.querySelector('#query-summary');
+  const rankingNote = document.querySelector('#ranking-note');
+  const catalogBanner = document.querySelector('#catalog-banner');
+  const demoPanel = document.querySelector('#demo-panel');
+  const demoList = document.querySelector('#demo-list');
   const controls = {
     city: document.querySelector('#city'),
     date: document.querySelector('#date'),
@@ -15,253 +21,103 @@
     category: document.querySelector('#category'),
     budget_kzt: document.querySelector('#budget'),
     duration_hours: document.querySelector('#duration'),
-    language: document.querySelector('#language'),
+    language: document.querySelector('#language')
   };
-  const fieldErrors = {
+  const errors = {
     city: document.querySelector('#city-error'),
     date: document.querySelector('#date-error'),
     event_type: document.querySelector('#event-type-error'),
     category: document.querySelector('#category-error'),
     budget_kzt: document.querySelector('#budget-error'),
-    duration_hours: document.querySelector('#duration-error'),
+    duration_hours: document.querySelector('#duration-error')
   };
-
-  let optionsReady = false;
+  let ready = false;
+  let pending = false;
   let lastRequest = null;
-  let busy = false;
+  let displayedRequest = null;
+  let retryAction = null;
 
-  function addOptions(select, values, placeholder, selectedValue = '') {
-    select.replaceChildren();
-    if (placeholder !== null) {
-      const initial = document.createElement('option');
-      initial.value = '';
-      initial.textContent = placeholder;
-      select.append(initial);
-    }
-    for (const value of values || []) {
-      const option = document.createElement('option');
-      option.value = String(value);
-      option.textContent = String(value);
-      if (String(value) === selectedValue) option.selected = true;
-      select.append(option);
-    }
+  function number(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? new Intl.NumberFormat('ru-RU').format(parsed) : '—';
   }
 
-  function setFieldError(name, message) {
-    const control = controls[name];
-    const error = fieldErrors[name];
-    if (!error || !control) return;
-    error.textContent = message;
-    control.setAttribute('aria-invalid', message ? 'true' : 'false');
-  }
-
-  function clearErrors() {
-    for (const name of Object.keys(fieldErrors)) setFieldError(name, '');
-  }
-
-  function formatNumber(value) {
-    const number = Number(value);
-    return Number.isFinite(number) ? new Intl.NumberFormat('ru-RU').format(number) : '—';
-  }
-
-  function formatEventDate(value) {
+  function dateText(value) {
     if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return value || 'выбранную дату';
-    const parsed = new Date(`${value}T00:00:00`);
-    return Number.isNaN(parsed.getTime())
-      ? value
-      : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(parsed);
+    const date = new Date(value + 'T00:00:00');
+    return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
   }
 
-  function busyAvailability(data, fallbackCounts = {}) {
-    const summary = data.availability_summary || data.availability || {};
-    const rawCount = summary.busy_excluded
-      ?? summary.busy_on_requested_date
-      ?? summary.busy_count
-      ?? summary.excluded_busy
-      ?? summary.busy
-      ?? fallbackCounts.busy
-      ?? 0;
-    const count = Number(rawCount);
-    return {
-      count: Number.isFinite(count) && count >= 0 ? count : 0,
-      date: summary.date || summary.requested_date || data.requested?.date || controls.date.value,
-    };
-  }
-
-  function setState(title, detail, kind = 'info') {
+  function setState(title, detail, kind) {
     resultState.replaceChildren();
-    resultState.className = `state state--${kind}`;
-    if (title) {
-      const heading = document.createElement('h3');
-      heading.textContent = title;
-      resultState.append(heading);
-    }
+    resultState.className = 'state ' + (kind || 'info');
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    resultState.append(heading);
     if (detail) {
-      const paragraph = document.createElement('p');
-      paragraph.textContent = detail;
-      resultState.append(paragraph);
+      const text = document.createElement('p');
+      text.textContent = detail;
+      resultState.append(text);
     }
-    resultState.hidden = !title && !detail;
+    resultState.hidden = false;
   }
 
-  function describeRejections(counts = {}, eventDate = '') {
-    const reasons = [
-      ['busy', eventDate ? `заняты ${eventDate}` : 'заняты на эту дату'],
-      ['budget', 'не подходят по бюджету'],
-      ['format', 'не работают с этим форматом'],
-      ['language', 'не подходят по языку'],
-      ['duration', 'не подходят по длительности'],
-    ];
-    const nonzero = reasons
-      .map(([key, label]) => [Number(counts[key]) || 0, label])
-      .filter(([count]) => count > 0)
-      .map(([count, label]) => `${count} ${label}`);
-    if (!nonzero.length) return 'Других подходящих профилей в каталоге нет.';
-    return `Почему вариантов меньше: ${nonzero.join('; ')}. Для каждого профиля показана первая проверка, которую он не прошёл.`;
-  }
-
-  function appendCard(profile) {
-    const article = document.createElement('article');
-    article.className = 'result-card';
-
-    const top = document.createElement('div');
-    top.className = 'result-card__top';
-    const name = document.createElement('h3');
-    name.className = 'result-card__name';
-    name.textContent = profile.anon_name || 'Подрядчик';
-    top.append(name);
-    if (profile.synthetic) {
-      const badge = document.createElement('span');
-      badge.className = 'badge badge--synthetic';
-      badge.textContent = 'Синтетический профиль';
-      top.append(badge);
-    }
-
-    const meta = document.createElement('p');
-    meta.className = 'result-card__meta';
-    const category = profile.category || 'Категория не указана';
-    const city = profile.city || 'Город не указан';
-    meta.textContent = `${category} · ${city}`;
-
-    const price = document.createElement('p');
-    price.className = 'result-card__price';
-    price.textContent = `от ${formatNumber(profile.price_from_kzt)} ₸`;
-
-    const explanation = document.createElement('p');
-    explanation.className = 'result-card__explanation';
-    explanation.textContent = profile.explanation || 'Профиль прошёл заданные условия подбора.';
-
-    article.append(top, meta, price, explanation);
-    resultList.append(article);
-  }
-
-  function renderRecommendations(data) {
-    resultList.replaceChildren();
-    retryActions.hidden = true;
-    const results = Array.isArray(data.results) ? data.results.slice(0, 3) : [];
-    const counts = data.rejection_counts || {};
-
-    if (data.outcome === 'no_category_in_city') {
-      setState('В этом городе такой категории нет', `В каталоге не нашли подрядчиков категории «${data.requested?.category || controls.category.value}» в городе «${data.requested?.city || controls.city.value}». Попробуйте выбрать другой город или категорию.`, 'empty');
-      return;
-    }
-
-    if (data.outcome === 'no_eligible_candidates' || results.length === 0) {
-      setState('Кандидаты есть, но условиям не соответствует никто', describeRejections(counts, data.requested?.date), 'empty');
-      return;
-    }
-
-    for (const profile of results) appendCard(profile);
-    const count = Number.isFinite(Number(data.total_eligible)) ? Number(data.total_eligible) : results.length;
-    const availability = busyAvailability(data, counts);
-    const busyDetail = `На ${formatEventDate(availability.date)} по занятости исключено: ${availability.count}.`;
-    const detail = count < 3
-      ? `Нашли ${count} ${count === 1 ? 'подходящий вариант' : 'подходящих варианта'}. ${busyDetail} ${describeRejections(counts, availability.date)}`
-      : `Показаны три подходящих варианта. ${busyDetail} ${describeRejections(counts, availability.date)}`;
-    setState('Подобрали варианты', detail, 'success');
-    if (data.degraded) {
-      const note = document.createElement('p');
-      note.className = 'degraded-note';
-      note.textContent = 'Семантический поиск сейчас недоступен; подбор выполнен по доступным параметрам профиля.';
-      resultState.append(note);
-    }
-  }
-
-  function setBusy(value) {
-    busy = value;
-    submitButton.disabled = value || !optionsReady;
+  function setPending(value) {
+    pending = value;
+    submitButton.disabled = value || !ready;
     retryButton.disabled = value;
     form.setAttribute('aria-busy', String(value));
     resultsPanel.setAttribute('aria-busy', String(value));
   }
 
-  async function loadOptions() {
-    optionsReady = false;
-    submitButton.disabled = true;
-    for (const select of [controls.city, controls.event_type, controls.category, controls.language]) select.disabled = true;
-    controls.date.disabled = true;
-    setState('Загружаем каталог', 'Получаем доступные города, категории и даты.', 'loading');
+  function setError(name, message) {
+    errors[name].textContent = message;
+    controls[name].setAttribute('aria-invalid', message ? 'true' : 'false');
+  }
+
+  function clearErrors() {
+    Object.keys(errors).forEach((name) => setError(name, ''));
+  }
+
+  function addOptions(select, values, placeholder) {
+    select.replaceChildren();
+    const first = document.createElement('option');
+    first.value = '';
+    first.textContent = placeholder;
+    select.append(first);
+    (values || []).forEach((value) => {
+      const option = document.createElement('option');
+      option.value = String(value);
+      option.textContent = String(value);
+      select.append(option);
+    });
+  }
+
+  async function requestJson(url, init) {
+    const abort = new AbortController();
+    const timer = window.setTimeout(() => abort.abort(), TIMEOUT);
     try {
-      const response = await fetch('/api/options', { headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const options = await response.json();
-      addOptions(controls.city, options.cities, 'Выберите город');
-      addOptions(controls.event_type, options.event_formats, 'Выберите тип мероприятия');
-      addOptions(controls.category, options.categories, 'Выберите категорию');
-      addOptions(controls.language, options.languages, 'Любой язык');
-      if (options.date_min) controls.date.min = options.date_min;
-      if (options.date_max) controls.date.max = options.date_max;
-      optionsReady = true;
-      for (const select of [controls.city, controls.event_type, controls.category, controls.language]) select.disabled = false;
-      controls.date.disabled = false;
-      submitButton.disabled = false;
-      setState('Подбор появится здесь', 'Заполните условия заказа, чтобы увидеть подходящих подрядчиков.', 'info');
+      const response = await fetch(url, Object.assign({}, init || {}, {
+        signal: abort.signal,
+        headers: Object.assign({ Accept: 'application/json' }, init && init.headers ? init.headers : {})
+      }));
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error((data && (data.message || data.detail || data.error)) || ('HTTP ' + response.status));
+      return data;
     } catch (error) {
-      console.error('Could not load recommendation options', error);
-      setState('Не удалось загрузить каталог', 'Проверьте соединение и попробуйте загрузить список ещё раз.', 'error');
-      retryActions.hidden = false;
-      retryButton.textContent = 'Загрузить каталог';
-      retryButton.onclick = loadOptions;
+      if (error.name === 'AbortError') throw new Error('Время ожидания ответа истекло. Повторите запрос.');
+      throw error;
+    } finally {
+      window.clearTimeout(timer);
     }
   }
 
-  function validate() {
-    clearErrors();
-    let firstInvalid = null;
-    const required = [
-      ['city', 'Выберите город.'],
-      ['date', 'Выберите дату мероприятия.'],
-      ['event_type', 'Выберите тип мероприятия.'],
-      ['category', 'Выберите категорию подрядчика.'],
-      ['budget_kzt', 'Укажите бюджет.'],
-    ];
-    for (const [name, message] of required) {
-      const control = controls[name];
-      if (!control.value) {
-        setFieldError(name, message);
-        firstInvalid ||= control;
-      }
-    }
-    const budgetValue = controls.budget_kzt.value;
-    if (budgetValue && (!Number.isFinite(Number(budgetValue)) || Number(budgetValue) < 0)) {
-      setFieldError('budget_kzt', 'Бюджет должен быть числом не меньше 0.');
-      firstInvalid ||= controls.budget_kzt;
-    }
-    const durationValue = controls.duration_hours.value;
-    if (durationValue && (!Number.isFinite(Number(durationValue)) || Number(durationValue) <= 0 || Number(durationValue) > 24)) {
-      setFieldError('duration_hours', 'Укажите длительность от 0,5 до 24 часов.');
-      firstInvalid ||= controls.duration_hours;
-    }
-    const dateValue = controls.date.value;
-    if (dateValue && ((controls.date.min && dateValue < controls.date.min) || (controls.date.max && dateValue > controls.date.max))) {
-      setFieldError('date', `Выберите дату в календарном диапазоне: ${controls.date.min} — ${controls.date.max}.`);
-      firstInvalid ||= controls.date;
-    }
-    if (firstInvalid) {
-      firstInvalid.focus();
-      return false;
-    }
-    return true;
+  function showCatalog(catalog) {
+    if (!catalog || !Number.isFinite(Number(catalog.total_profiles))) return;
+    const source = catalog.source === 'primary' ? 'Исходный каталог' : 'Демонстрационный каталог';
+    const synthetic = Number(catalog.synthetic_profiles);
+    catalogBanner.textContent = source + ': ' + catalog.total_profiles + ' профилей' + (synthetic > 0 ? ', синтетических: ' + synthetic : '') + '.';
+    catalogBanner.hidden = false;
   }
 
   function readRequest() {
@@ -270,63 +126,286 @@
       date: controls.date.value,
       event_type: controls.event_type.value,
       category: controls.category.value,
-      budget_kzt: Number(controls.budget_kzt.value),
+      budget_kzt: Number(controls.budget_kzt.value)
     };
     if (controls.duration_hours.value) request.duration_hours = Number(controls.duration_hours.value);
     if (controls.language.value) request.language = controls.language.value;
     return request;
   }
 
-  async function submitRequest(request) {
-    if (busy) return;
-    lastRequest = request;
-    setBusy(true);
+  function requestLabel(request) {
+    return [request.city, dateText(request.date), request.event_type, request.category, 'до ' + number(request.budget_kzt) + ' ₸', request.duration_hours ? request.duration_hours + ' ч' : '', request.language || ''].filter(Boolean).join(' · ');
+  }
+
+  function matchesForm(request) {
+    const current = readRequest();
+    return ['city', 'date', 'event_type', 'category', 'budget_kzt', 'duration_hours', 'language'].every((key) => String(current[key] || '') === String(request[key] || ''));
+  }
+
+  function showQuery(request) {
+    querySummary.replaceChildren();
+    if (!request) {
+      querySummary.hidden = true;
+      return;
+    }
+    const title = document.createElement('strong');
+    title.textContent = 'Подбор выполнен по запросу: ';
+    const body = document.createElement('span');
+    body.textContent = requestLabel(request);
+    querySummary.append(title, body);
+    if (!matchesForm(request)) {
+      const changed = document.createElement('p');
+      changed.textContent = 'Поля формы были изменены после отправки. Карточки относятся к запросу выше.';
+      querySummary.append(changed);
+    }
+    querySummary.hidden = false;
+  }
+
+  function showRanking(ranking) {
+    rankingNote.hidden = true;
+    rankingNote.textContent = '';
+    if (!ranking) return;
+    rankingNote.textContent = ranking.mode === 'semantic'
+      ? 'Для порядка карточек учтено смысловое совпадение описания с запросом.'
+      : 'Смысловое ранжирование не подключено: используется локальное сопоставление слов. Условия заказа проверены.';
+    rankingNote.hidden = false;
+  }
+
+  function rejectionText(counts) {
+    const labels = {
+      busy: 'заняты на выбранную дату',
+      budget: 'выходят за бюджет',
+      format: 'не берут этот формат',
+      language: 'не подходят по языку',
+      duration: 'не подходят по длительности'
+    };
+    return Object.keys(labels).map((key) => [Number(counts[key]) || 0, labels[key]])
+      .filter((entry) => entry[0] > 0)
+      .map((entry) => entry[0] + ' — ' + entry[1]).join('; ');
+  }
+
+  function appendEvidence(card, evidence) {
+    if (!Array.isArray(evidence) || !evidence.length) return;
+    const details = document.createElement('details');
+    details.className = 'evidence';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Основания рекомендации';
+    const list = document.createElement('ul');
+    evidence.forEach((item) => {
+      if (!item || !item.value) return;
+      const line = document.createElement('li');
+      line.textContent = item.label ? item.label + ': ' + item.value : item.value;
+      list.append(line);
+    });
+    if (!list.childElementCount) return;
+    details.append(summary, list);
+    card.append(details);
+  }
+
+  function appendCard(profile) {
+    const card = document.createElement('article');
+    card.className = 'result-card';
+    const top = document.createElement('div');
+    top.className = 'result-card__top';
+    const name = document.createElement('h3');
+    name.textContent = profile.anon_name || 'Подрядчик';
+    top.append(name);
+    if (profile.synthetic) {
+      const badge = document.createElement('span');
+      badge.className = 'badge synthetic';
+      badge.textContent = 'Синтетический профиль';
+      top.append(badge);
+    }
+    const meta = document.createElement('p');
+    meta.className = 'meta';
+    meta.textContent = (profile.category || 'Категория не указана') + ' · ' + (profile.city || 'Город не указан');
+    const price = document.createElement('p');
+    price.className = 'price';
+    price.textContent = 'от ' + number(profile.price_from_kzt) + ' ₸ за мероприятие';
+    const explanation = document.createElement('p');
+    explanation.className = 'explanation';
+    explanation.textContent = profile.explanation || 'Профиль прошёл условия этого запроса.';
+    card.append(top, meta, price, explanation);
+    appendEvidence(card, profile.evidence);
+    resultList.append(card);
+  }
+
+  function render(data) {
     resultList.replaceChildren();
     retryActions.hidden = true;
-    retryButton.textContent = 'Повторить запрос';
-    retryButton.onclick = null;
+    retryAction = null;
+    showCatalog(data.catalog);
+    displayedRequest = data.requested || lastRequest;
+    showQuery(displayedRequest);
+    showRanking(data.ranking);
+    const results = Array.isArray(data.results) ? data.results.slice(0, 3) : [];
+    const counts = data.rejection_counts || {};
+    const availability = data.availability_summary || {};
+    const busyCount = Number(availability.busy_excluded ?? counts.busy ?? 0) || 0;
+    const busyDetail = 'На ' + dateText(availability.date || data.requested?.date) + ' заняты: ' + busyCount + '.';
+    const request = data.requested || lastRequest || {};
+    if (data.outcome === 'no_category_in_city') {
+      setState('В этом городе такой категории нет', 'В каталоге нет категории «' + (request.category || '') + '» в городе «' + (request.city || '') + '». Выберите другой город или категорию.', 'empty');
+      return;
+    }
+    if (data.outcome === 'no_eligible_candidates' || !results.length) {
+      const reasons = rejectionText(counts);
+      setState('Кандидаты есть, но условиям не соответствует никто', busyDetail + (reasons ? ' Причины: ' + reasons + '.' : ''), 'empty');
+      return;
+    }
+    results.forEach(appendCard);
+    const eligibleCount = Number(data.total_eligible);
+    const eligible = Number.isFinite(eligibleCount) ? eligibleCount : results.length;
+    const candidateCount = Number(data.candidate_count);
+    let detail = busyDetail;
+    if (Number.isFinite(candidateCount)) detail += ' В городе в этой категории: ' + candidateCount + '; прошли условия: ' + eligible + '.';
+    if (eligible > results.length) detail += ' Ещё подходящих в каталоге: ' + (eligible - results.length) + '.';
+    if (eligible < 3) {
+      const reasons = rejectionText(counts);
+      detail += ' Показываем ' + results.length + ' из максимум трёх карточек.' + (reasons ? ' Причины отсева: ' + reasons + '. Каждый профиль учтён по первой причине.' : ' Других профилей этой категории в городе нет.');
+    }
+    setState('Подобрали варианты', detail, 'success');
+  }
+
+  function validate() {
+    clearErrors();
+    let first = null;
+    const required = [['city', 'Выберите город.'], ['date', 'Выберите дату мероприятия.'], ['event_type', 'Выберите тип мероприятия.'], ['category', 'Выберите категорию.'], ['budget_kzt', 'Укажите бюджет.']];
+    required.forEach((item) => {
+      if (!controls[item[0]].value) {
+        setError(item[0], item[1]);
+        first ||= controls[item[0]];
+      }
+    });
+    if (controls.budget_kzt.value && (!Number.isFinite(Number(controls.budget_kzt.value)) || Number(controls.budget_kzt.value) < 0)) {
+      setError('budget_kzt', 'Бюджет должен быть числом не меньше 0.');
+      first ||= controls.budget_kzt;
+    }
+    if (controls.duration_hours.value && (!Number.isFinite(Number(controls.duration_hours.value)) || Number(controls.duration_hours.value) <= 0 || Number(controls.duration_hours.value) > 24)) {
+      setError('duration_hours', 'Длительность должна быть больше 0 и не больше 24 часов.');
+      first ||= controls.duration_hours;
+    }
+    if (controls.date.value && ((controls.date.min && controls.date.value < controls.date.min) || (controls.date.max && controls.date.value > controls.date.max))) {
+      setError('date', 'Выберите дату в диапазоне ' + controls.date.min + ' — ' + controls.date.max + '.');
+      first ||= controls.date;
+    }
+    if (first) first.focus();
+    return !first;
+  }
+
+  async function submit(request) {
+    if (pending) return;
+    lastRequest = request;
+    displayedRequest = null;
+    setPending(true);
+    resultList.replaceChildren();
+    querySummary.hidden = true;
+    rankingNote.hidden = true;
+    retryActions.hidden = true;
+    retryAction = null;
     setState('Ищем подходящих подрядчиков', 'Проверяем доступность, бюджет и условия профилей.', 'loading');
     try {
-      const response = await fetch('/api/recommendations', {
+      const data = await requestJson('/api/recommendations', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(request),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
       });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(data?.detail || data?.error || `HTTP ${response.status}`);
-      if (!data || !['recommended', 'no_category_in_city', 'no_eligible_candidates'].includes(data.outcome)) {
-        throw new Error('Сервер вернул ответ в неожиданном формате.');
-      }
-      renderRecommendations(data);
+      if (!data || !['recommended', 'no_category_in_city', 'no_eligible_candidates'].includes(data.outcome)) throw new Error('Сервер вернул ответ в неожиданном формате.');
+      render(data);
     } catch (error) {
-      console.error('Recommendation request failed', error);
-      setState('Не удалось получить подбор', 'Проверьте соединение. Ваш запрос сохранён — можно повторить его.', 'error');
-      retryActions.hidden = false;
+      setState('Не удалось получить подбор', (error.message || 'Проверьте соединение.') + ' Запрос сохранён — его можно повторить.', 'error');
+      retryAction = () => submit(lastRequest);
       retryButton.textContent = 'Повторить запрос';
-      retryButton.onclick = () => submitRequest(lastRequest);
+      retryActions.hidden = false;
     } finally {
-      setBusy(false);
+      setPending(false);
+    }
+  }
+
+  function fill(request) {
+    Object.values(controls).forEach((control) => { control.value = ''; });
+    Object.keys(request || {}).forEach((key) => {
+      if (controls[key] && request[key] !== null && request[key] !== undefined) controls[key].value = String(request[key]);
+    });
+  }
+
+  async function loadDemos() {
+    try {
+      const data = await requestJson('/api/demo-scenarios');
+      const scenarios = Array.isArray(data.scenarios) ? data.scenarios : [];
+      if (!scenarios.length) return;
+      demoList.replaceChildren();
+      scenarios.forEach((scenario) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'demo-button';
+        const title = document.createElement('strong');
+        title.textContent = scenario.title || 'Демонстрационный запрос';
+        const detail = document.createElement('span');
+        detail.textContent = scenario.description || '';
+        button.append(title, detail);
+        button.addEventListener('click', () => {
+          if (pending || !ready) return;
+          fill(scenario.request);
+          clearErrors();
+          submit(readRequest());
+        });
+        demoList.append(button);
+      });
+      demoPanel.hidden = false;
+    } catch (error) {
+      console.info('Demo scenarios unavailable', error);
+    }
+  }
+
+  async function loadOptions() {
+    if (pending) return;
+    ready = false;
+    setPending(true);
+    retryActions.hidden = true;
+    retryAction = null;
+    [controls.city, controls.date, controls.event_type, controls.category, controls.language].forEach((control) => { control.disabled = true; });
+    setState('Загружаем каталог', 'Получаем доступные города, категории и даты.', 'loading');
+    try {
+      const options = await requestJson('/api/options');
+      addOptions(controls.city, options.cities, 'Выберите город');
+      addOptions(controls.event_type, options.event_formats, 'Выберите тип мероприятия');
+      addOptions(controls.category, options.categories, 'Выберите категорию');
+      addOptions(controls.language, options.languages, 'Любой язык');
+      controls.date.min = options.date_min || '';
+      controls.date.max = options.date_max || '';
+      showCatalog(options.catalog);
+      [controls.city, controls.date, controls.event_type, controls.category, controls.language].forEach((control) => { control.disabled = false; });
+      ready = true;
+      submitButton.disabled = false;
+      setState('Подбор появится здесь', 'Заполните условия заказа, чтобы увидеть подходящих подрядчиков.', 'info');
+      loadDemos();
+    } catch (error) {
+      setState('Не удалось загрузить каталог', (error.message || 'Проверьте соединение.') + ' Можно повторить загрузку.', 'error');
+      retryAction = loadOptions;
+      retryButton.textContent = 'Загрузить каталог';
+      retryActions.hidden = false;
+    } finally {
+      setPending(false);
     }
   }
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (!optionsReady || !validate()) return;
-    submitRequest(readRequest());
+    if (ready && validate()) submit(readRequest());
   });
-
-  for (const name of Object.keys(fieldErrors)) {
-    controls[name].addEventListener('input', () => {
-      if (controls[name].getAttribute('aria-invalid') === 'true') setFieldError(name, '');
-    });
-    controls[name].addEventListener('change', () => {
-      if (controls[name].getAttribute('aria-invalid') === 'true') setFieldError(name, '');
-    });
-  }
-
+  Object.keys(errors).forEach((name) => {
+    ['input', 'change'].forEach((eventName) => controls[name].addEventListener(eventName, () => {
+      if (controls[name].getAttribute('aria-invalid') === 'true') setError(name, '');
+    }));
+  });
+  Object.values(controls).forEach((control) => {
+    ['input', 'change'].forEach((eventName) => control.addEventListener(eventName, () => {
+      if (displayedRequest && !pending) showQuery(displayedRequest);
+    }));
+  });
   retryButton.addEventListener('click', () => {
-    if (retryButton.onclick) retryButton.onclick();
-    else if (lastRequest) submitRequest(lastRequest);
+    if (!pending && retryAction) retryAction();
   });
   loadOptions();
 })();

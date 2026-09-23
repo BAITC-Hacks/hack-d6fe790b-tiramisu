@@ -1,4 +1,4 @@
-"""Stdlib-only checks for the recommendation service and JSONL catalog.
+"""Offline regression tests for catalog, ranking fallback and demo scenarios.
 
 Run from the repository root:
     python -m unittest discover -s tests -v
@@ -6,256 +6,217 @@ Run from the repository root:
 
 from __future__ import annotations
 
-import copy
-import os
+import json
+import math
 import sys
-import time
 import unittest
-from datetime import date, timedelta
+from copy import deepcopy
+from datetime import date
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
-FIXTURES = ROOT / "tests" / "fixtures" / "invalid_synthetic_additions"
 sys.path.insert(0, str(BACKEND))
 
-from recommendation_service import (  # noqa: E402
-    DATE_MAX,
-    DATE_MIN,
-    RecommendationService,
-    load_catalog,
-    validate_profile,
-)
+from ranking import RankingSnapshot, build_artifact, catalog_fingerprint, query_inputs  # noqa: E402
+from recommendation_service import RecommendationService, load_catalog, load_profiles  # noqa: E402
 
 
-class RecommendationServiceTests(unittest.TestCase):
-    """Contract checks that use whichever catalog is selected by load_catalog."""
+DATA_DIR = BACKEND / "data"
+MANIFEST_PATH = DATA_DIR / "demo-scenarios.json"
+FIXTURES = ROOT / "tests" / "fixtures" / "invalid_synthetic_additions"
+GENERATOR_SPEC = spec_from_file_location("generate_demo_catalog", ROOT / "scripts" / "generate_demo_catalog.py")
+assert GENERATOR_SPEC and GENERATOR_SPEC.loader
+GENERATOR = module_from_spec(GENERATOR_SPEC)
+GENERATOR_SPEC.loader.exec_module(GENERATOR)
 
+
+class CatalogCalendarTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.profiles, cls.catalog_source = load_catalog(BACKEND / "data")
-        cls.service = RecommendationService(cls.profiles, cls.catalog_source)
+        cls.profiles = load_profiles(DATA_DIR / "profiles.jsonl")
+
+    def test_synthetic_fallback_has_realistic_seasonal_occupancy(self) -> None:
+        self.assertEqual(len(self.profiles), 66)
+        self.assertTrue(all(profile["synthetic"] is True for profile in self.profiles))
+        targets = {9: (3, 8), 10: (12, 31), 11: (12, 30), 12: (23, 31)}
+        for profile in self.profiles:
+            busy_dates = [date.fromisoformat(value) for value in profile["busy_dates"]]
+            for month, (expected_count, days_in_window) in targets.items():
+                busy_count = sum(day.month == month for day in busy_dates)
+                self.assertEqual(busy_count, expected_count, profile["id"])
+                rate = busy_count / days_in_window
+                if month == 12:
+                    self.assertGreaterEqual(rate, 0.70)
+                    self.assertLessEqual(rate, 0.80)
+                else:
+                    self.assertGreaterEqual(rate, 0.30)
+                    self.assertLessEqual(rate, 0.50)
+
+        december = [date.fromisoformat(value) for profile in self.profiles for value in profile["busy_dates"] if value[5:7] == "12"]
+        weekend_share = sum(day.weekday() >= 5 for day in december) / len(december)
+        self.assertGreater(weekend_share, 8 / 31, "December selection should favour weekends")
+
+    def test_catering_prices_are_event_packages_and_photo_service_has_hours(self) -> None:
+        by_id = {profile["id"]: profile for profile in self.profiles}
+        for profile_id in ("demo-007", "demo-014"):
+            profile = by_id[profile_id]
+            self.assertGreaterEqual(profile["price_from_kzt"], 100_000)
+            self.assertIn("пакет", profile["description"].lower())
+        self.assertEqual(by_id["demo-018"]["max_hours"], 8)
+
+    def test_primary_catalog_rejects_non_synthetic_additions_and_duplicate_ids(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "synthetic"):
+            load_catalog(FIXTURES)
+
+        duplicate = deepcopy(self.profiles[0])
+        with patch("recommendation_service.Path.is_file", return_value=True), patch("recommendation_service.load_profiles", side_effect=[[duplicate, deepcopy(duplicate)], []]):
+            with self.assertRaisesRegex(RuntimeError, "Duplicate profile IDs"):
+                load_catalog(Path("catalog-with-duplicates"))
+
+    def test_calendar_generator_is_deterministic_and_refuses_non_synthetic_input(self) -> None:
+        first = GENERATOR.rebuild(deepcopy(self.profiles))
+        second = GENERATOR.rebuild(deepcopy(self.profiles))
+        self.assertEqual(first, second)
+        non_synthetic = deepcopy(self.profiles[:1])
+        non_synthetic[0]["synthetic"] = False
+        with self.assertRaisesRegex(ValueError, "synthetic"):
+            GENERATOR.rebuild(non_synthetic)
+
+
+class ManifestAndRecommendationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # The manifest documents only the synthetic fallback. It stays
+        # testable even when an organizer dataset is present beside it.
+        cls.profiles = load_profiles(DATA_DIR / "profiles.jsonl")
+        cls.service = RecommendationService(cls.profiles, "demo_fallback", embeddings_path=None)
+        cls.manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+    def test_manifest_matches_catalog_version_and_required_demo_coverage(self) -> None:
+        self.assertEqual(self.manifest["catalog_version"], catalog_fingerprint(self.profiles))
+        scenarios = {item["id"]: item for item in self.manifest["scenarios"]}
+        self.assertEqual(set(scenarios), {"dense-autumn", "rare-under-three", "no-eligible", "no-category", "dense-date-one", "dense-date-two", "banquet-hall", "december-season"})
+        self.assertGreaterEqual(scenarios["dense-autumn"]["expected"]["total_eligible"], 4)
+        self.assertLess(scenarios["rare-under-three"]["expected"]["total_eligible"], 3)
+        self.assertEqual(scenarios["no-eligible"]["expected"]["outcome"], "no_eligible_candidates")
+        self.assertEqual(scenarios["no-category"]["expected"]["outcome"], "no_category_in_city")
+
+    def test_each_manifest_request_matches_expected_lexical_result_without_network(self) -> None:
+        with patch("urllib.request.urlopen", side_effect=AssertionError("HTTP is forbidden during serving")):
+            for scenario in self.manifest["scenarios"]:
+                with self.subTest(scenario=scenario["id"]):
+                    response, status = self.service.recommend(scenario["request"])
+                    expected = scenario["expected"]
+                    self.assertEqual(status, 200)
+                    self.assertEqual(response["outcome"], expected["outcome"])
+                    self.assertEqual(response["total_eligible"], expected["total_eligible"])
+                    self.assertEqual([card["id"] for card in response["results"]], expected["ids"])
+                    self.assertEqual(response["rejection_counts"]["busy"], expected["busy_excluded"])
+                    self.assertEqual(response["ranking"]["mode"], "lexical")
+
+    def test_recommendations_are_deterministic_and_cards_have_traceable_evidence(self) -> None:
+        request = next(item["request"] for item in self.manifest["scenarios"] if item["id"] == "dense-autumn")
+        first, _ = self.service.recommend(request)
+        second, _ = self.service.recommend(request)
+        self.assertEqual([card["id"] for card in first["results"]], [card["id"] for card in second["results"]])
+        for card in first["results"]:
+            self.assertIn("В описании", card["explanation"])
+            self.assertTrue(card["evidence"])
+            self.assertTrue({"kind", "label", "value", "source"}.issubset(card["evidence"][0]))
+            self.assertEqual(card["evidence"][0]["source"], "busy_dates")
+
+    def test_date_pair_changes_ids_and_reports_busy_reason(self) -> None:
+        scenarios = {item["id"]: item for item in self.manifest["scenarios"]}
+        first, _ = self.service.recommend(scenarios["dense-date-one"]["request"])
+        second, _ = self.service.recommend(scenarios["dense-date-two"]["request"])
+        self.assertNotEqual({card["id"] for card in first["results"]}, {card["id"] for card in second["results"]})
+        self.assertNotEqual(first["availability_summary"]["busy_excluded"], second["availability_summary"]["busy_excluded"])
+
+    def _snapshot_from_payload(self, payload: str) -> RankingSnapshot:
+        fake_path = Path("test-artifact.json")
+        with patch.object(Path, "is_file", return_value=True), patch.object(Path, "stat", return_value=SimpleNamespace(st_size=len(payload))), patch.object(Path, "read_text", return_value=payload):
+            return RankingSnapshot(self.profiles, fake_path)
+
+    def test_malformed_stale_and_partial_artifacts_fall_back_to_lexical(self) -> None:
+        stale = self._snapshot_from_payload(json.dumps({"catalog_version": "another-catalog"}))
+        malformed = self._snapshot_from_payload("{")
+        partial = self._snapshot_from_payload(json.dumps({"schema_version": 1, "model": "text-embedding-3-small", "catalog_version": catalog_fingerprint(self.profiles), "profiles": {}, "queries": {}}))
+        self.assertEqual((stale.mode, stale.artifact_status), ("lexical", "stale"))
+        self.assertEqual((malformed.mode, malformed.artifact_status), ("lexical", "invalid"))
+        self.assertEqual((partial.mode, partial.artifact_status), ("lexical", "invalid"))
+
+    def test_valid_semantic_artifact_is_reused_without_external_requests(self) -> None:
+        profile_vectors = {profile["id"]: [1.0, 0.0] for profile in self.profiles}
+        query_vectors = {key: [1.0, 0.0] for key in query_inputs(self.profiles)}
+        payload = json.dumps(build_artifact(self.profiles, profile_vectors, query_vectors))
+        first = self._snapshot_from_payload(payload)
+        second = self._snapshot_from_payload(payload)
+        request = next(item["request"] for item in self.manifest["scenarios"] if item["id"] == "dense-autumn")
+        candidates = [profile for profile in self.profiles if profile["city"] == request["city"] and request["category"] in profile["categories"]]
+        self.assertEqual((first.mode, first.artifact_status), ("semantic", "ready"))
+        self.assertEqual(first.scores(request, candidates), second.scores(request, candidates))
+
+
+class RequestValidationAndFilterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        profiles = load_profiles(DATA_DIR / "profiles.jsonl")
+        profile = dict(profiles[0])
+        profile.update({
+            "id": "filter-fixture",
+            "city": "Тестовый город",
+            "categories": ["Тестовая категория"],
+            "price_from_kzt": 100,
+            "event_formats": ["Тестовый формат"],
+            "languages": ["русский"],
+            "max_hours": 2,
+            "busy_dates": ["2026-10-01"],
+            "description": "Тестовый подрядчик для проверки независимых фильтров.",
+            "synthetic": True,
+        })
+        cls.service = RecommendationService([profile], "test", embeddings_path=None)
 
     @staticmethod
-    def _days() -> list[str]:
-        total = (DATE_MAX - DATE_MIN).days
-        return [(DATE_MIN + timedelta(days=offset)).isoformat() for offset in range(total + 1)]
+    def request(**changes: object) -> dict[str, object]:
+        payload: dict[str, object] = {"city": "Тестовый город", "date": "2026-10-02", "event_type": "Тестовый формат", "category": "Тестовая категория", "budget_kzt": 100}
+        payload.update(changes)
+        return payload
 
-    def _open_date_for(self, profile: dict) -> str:
-        busy = set(profile["busy_dates"])
-        return next(day for day in self._days() if day not in busy)
+    def test_required_and_invalid_fields_are_rejected(self) -> None:
+        invalid = [
+            {},
+            self.request(city=""),
+            self.request(date="2026-2-1"),
+            self.request(budget_kzt=True),
+            self.request(budget_kzt=math.nan),
+            self.request(budget_kzt=10 ** 10000),
+            self.request(duration_hours=0),
+            self.request(language=""),
+        ]
+        for index, payload in enumerate(invalid):
+            with self.subTest(case=index):
+                response, status = self.service.recommend(payload)
+                self.assertEqual((status, response["error"]), (400, "invalid_request"))
 
-    def _request_for(self, profile: dict, *, event_type: str | None = None, date_value: str | None = None, budget: int | None = None) -> dict:
-        return {
-            "city": profile["city"],
-            "date": date_value or self._open_date_for(profile),
-            "event_type": event_type or profile["event_formats"][0],
-            "category": profile["categories"][0],
-            "budget_kzt": budget if budget is not None else max(int(item["price_from_kzt"]) for item in self.profiles) + 1,
-        }
-
-    def _profile_with_busy_date(self) -> tuple[dict, str]:
-        for profile in self.profiles:
-            for busy_day in profile["busy_dates"]:
-                busy_date = date.fromisoformat(busy_day)
-                if DATE_MIN <= busy_date <= DATE_MAX:
-                    return profile, busy_day
-        self.fail("The catalog has no busy date in the supported request range")
-
-    def setUp(self) -> None:
-        # Tests are offline and must never use a developer's real API key.
-        self._environment = patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False)
-        self._environment.start()
-
-    def tearDown(self) -> None:
-        self._environment.stop()
-
-    def test_recommendation_returns_at_most_three_cards_and_is_fast(self) -> None:
-        profile = self.profiles[0]
-        payload = self._request_for(profile)
-        started = time.perf_counter()
-        response, status = self.service.recommend(payload)
-        elapsed = time.perf_counter() - started
-
-        self.assertEqual(status, 200)
-        self.assertEqual(response["outcome"], "recommended")
-        self.assertGreaterEqual(response["total_eligible"], len(response["results"]))
-        self.assertLessEqual(len(response["results"]), 3)
-        self.assertLess(elapsed, 10, "A local catalog request must complete within 10 seconds")
-        for card in response["results"]:
-            self.assertTrue(card["explanation"])
-            self.assertIn("₸", card["explanation"])
-
-    def test_no_category_in_city_is_a_distinct_outcome(self) -> None:
-        profile = self.profiles[0]
-        payload = self._request_for(profile)
-        payload["category"] = "Несуществующая категория для теста"
-
-        response, status = self.service.recommend(payload)
-        self.assertEqual(status, 200)
-        self.assertEqual(response["outcome"], "no_category_in_city")
-        self.assertEqual(response["results"], [])
-
-    def test_rejection_counts_report_busy_budget_and_format(self) -> None:
-        profile, busy_day = self._profile_with_busy_date()
-        high_budget = max(int(item["price_from_kzt"]) for item in self.profiles) + 1
-
-        busy_response, busy_status = self.service.recommend(
-            self._request_for(profile, date_value=busy_day, budget=high_budget)
-        )
-        self.assertEqual(busy_status, 200)
-        self.assertGreaterEqual(busy_response["rejection_counts"]["busy"], 1)
-        self.assertEqual(busy_response["availability_summary"]["date"], busy_day)
-        self.assertEqual(
-            busy_response["availability_summary"]["busy_excluded"],
-            busy_response["rejection_counts"]["busy"],
-        )
-
-        budget_response, budget_status = self.service.recommend(
-            self._request_for(profile, budget=0)
-        )
-        self.assertEqual(budget_status, 200)
-        self.assertGreaterEqual(budget_response["rejection_counts"]["budget"], 1)
-
-        format_response, format_status = self.service.recommend(
-            self._request_for(profile, event_type="несовместимый формат теста", budget=high_budget)
-        )
-        self.assertEqual(format_status, 200)
-        self.assertGreaterEqual(format_response["rejection_counts"]["format"], 1)
-
-    def test_required_and_optional_request_validation(self) -> None:
-        response, status = self.service.recommend({})
-        self.assertEqual(status, 400)
-        self.assertEqual(response["error"], "invalid_request")
-
-        profile = self.profiles[0]
-        invalid_optional = self._request_for(profile)
-        invalid_optional["duration_hours"] = 0
-        response, status = self.service.recommend(invalid_optional)
-        self.assertEqual(status, 400)
-
-        valid_optional = self._request_for(profile)
-        valid_optional["language"] = profile["languages"][0]
-        valid_optional["duration_hours"] = 1
-        response, status = self.service.recommend(valid_optional)
-        self.assertEqual(status, 200)
-        self.assertIn(response["outcome"], {"recommended", "no_eligible_candidates"})
-
-    def test_repeated_request_has_identical_order(self) -> None:
-        payload = self._request_for(self.profiles[0])
-        first, first_status = self.service.recommend(payload)
-        second, second_status = self.service.recommend(payload)
-
-        self.assertEqual((first_status, first["outcome"]), (second_status, second["outcome"]))
-        self.assertEqual([card["id"] for card in first["results"]], [card["id"] for card in second["results"]])
-
-    def test_two_dates_change_availability_and_name_busy_reason(self) -> None:
-        profile, busy_day = self._profile_with_busy_date()
-        open_day = self._open_date_for(profile)
-        high_budget = max(int(item["price_from_kzt"]) for item in self.profiles) + 1
-        busy_payload = self._request_for(profile, date_value=busy_day, budget=high_budget)
-        open_payload = self._request_for(profile, date_value=open_day, budget=high_budget)
-
-        # A single catalog record makes the date-driven change unambiguous even
-        # when a production category has more than three suitable candidates.
-        isolated_service = RecommendationService([profile], self.catalog_source)
-        busy_response, _ = isolated_service.recommend(busy_payload)
-        open_response, _ = isolated_service.recommend(open_payload)
-        busy_ids = {card["id"] for card in busy_response["results"]}
-        open_ids = {card["id"] for card in open_response["results"]}
-
-        self.assertNotIn(profile["id"], busy_ids)
-        self.assertIn(profile["id"], open_ids)
-        self.assertGreaterEqual(busy_response["availability_summary"]["busy_excluded"], 1)
-        self.assertEqual(busy_response["availability_summary"]["date"], busy_day)
-        self.assertNotEqual(busy_ids, open_ids)
-
-    def test_absent_openai_key_uses_deterministic_lexical_fallback(self) -> None:
-        payload = self._request_for(self.profiles[0])
-        first, first_status = self.service.recommend(payload)
-        second, second_status = self.service.recommend(payload)
-
-        self.assertEqual(first_status, 200)
-        self.assertEqual(second_status, 200)
-        self.assertTrue(first["degraded"])
-        self.assertTrue(second["degraded"])
-        self.assertEqual([card["id"] for card in first["results"]], [card["id"] for card in second["results"]])
-
-    def test_malformed_embeddings_response_uses_lexical_fallback(self) -> None:
-        payload = self._request_for(self.profiles[0])
-        with patch.object(self.service, "_embeddings", side_effect=IndexError("bad embedding index")):
-            response, status = self.service.recommend(payload)
-        self.assertEqual(status, 200)
-        self.assertEqual(response["outcome"], "recommended")
-        self.assertTrue(response["degraded"])
-
-    def test_documented_fallback_demo_scenarios(self) -> None:
-        if self.catalog_source != "demo_fallback":
-            self.skipTest("README fallback scenarios apply only before the source catalog is added")
-        scenarios = (
-            ({"city": "Алматы", "date": "2026-10-18", "event_type": "юбилей", "category": "Ведущий", "budget_kzt": 350000, "duration_hours": 5, "language": "русский"}, "recommended", 6, 3),
-            ({"city": "Алматы", "date": "2026-11-01", "event_type": "юбилей", "category": "Флорист", "budget_kzt": 250000, "language": "русский"}, "recommended", 3, 3),
-            ({"city": "Алматы", "date": "2026-11-14", "event_type": "свадьба", "category": "Ведущий", "budget_kzt": 100000, "language": "русский"}, "no_eligible_candidates", 0, 0),
-        )
-        for payload, outcome, eligible, displayed in scenarios:
-            with self.subTest(payload=payload):
+    def test_busy_budget_format_language_and_duration_filters_are_independent(self) -> None:
+        checks = [
+            (self.request(date="2026-10-01"), "busy"),
+            (self.request(budget_kzt=99), "budget"),
+            (self.request(event_type="Другой формат"), "format"),
+            (self.request(language="казахский"), "language"),
+            (self.request(duration_hours=3), "duration"),
+        ]
+        for payload, expected_reason in checks:
+            with self.subTest(reason=expected_reason):
                 response, status = self.service.recommend(payload)
                 self.assertEqual(status, 200)
-                self.assertEqual(response["outcome"], outcome)
-                self.assertEqual(response["total_eligible"], eligible)
-                self.assertEqual(len(response["results"]), displayed)
-
-
-class CatalogValidationTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.profiles, cls.catalog_source = load_catalog(BACKEND / "data")
-
-    def test_catalog_records_have_valid_required_fields_dates_and_synthetic_flag(self) -> None:
-        self.assertTrue(self.profiles)
-        for profile in self.profiles:
-            self.assertIsInstance(profile["synthetic"], bool)
-            self.assertIsInstance(profile["price_from_kzt"], (int, float))
-            self.assertIsInstance(profile["categories"], list)
-            for busy_day in profile["busy_dates"]:
-                date.fromisoformat(busy_day)
-
-    def test_synthetic_fallback_has_the_documented_catalog_shape(self) -> None:
-        if self.catalog_source != "demo_fallback":
-            self.skipTest("The real source catalog defines its own category distribution")
-        category_counts = {}
-        for profile in self.profiles:
-            for category in profile["categories"]:
-                category_counts[category] = category_counts.get(category, 0) + 1
-        self.assertEqual(len(self.profiles), 66)
-        self.assertTrue(all(profile["synthetic"] for profile in self.profiles))
-        self.assertEqual(category_counts["Ведущий"], 15)
-        self.assertEqual(category_counts["Фотограф"], 12)
-        self.assertEqual(category_counts["Банкетный зал"], 8)
-
-    def test_profile_validation_rejects_missing_fields_bad_dates_and_wrong_synthetic_type(self) -> None:
-        valid = copy.deepcopy(self.profiles[0])
-        cases = []
-        missing = copy.deepcopy(valid)
-        del missing["city"]
-        cases.append(missing)
-        bad_date = copy.deepcopy(valid)
-        bad_date["busy_dates"] = ["2026-99-99"]
-        cases.append(bad_date)
-        bad_synthetic = copy.deepcopy(valid)
-        bad_synthetic["synthetic"] = "true"
-        cases.append(bad_synthetic)
-
-        for record in cases:
-            with self.subTest(record=record):
-                with self.assertRaisesRegex(RuntimeError, "Invalid profile"):
-                    validate_profile(record, Path("invalid.jsonl"), 1)
-
-    def test_synthetic_additions_require_the_synthetic_flag(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "synthetic-additions"):
-            load_catalog(FIXTURES)
+                self.assertEqual(response["outcome"], "no_eligible_candidates")
+                self.assertEqual(response["rejection_counts"][expected_reason], 1)
 
 
 if __name__ == "__main__":

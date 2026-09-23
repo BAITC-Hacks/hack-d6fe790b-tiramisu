@@ -1,8 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
+[hidden] {
+  display: none !important;
+}
 
 :root {
   color-scheme: light;
-  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   color: #202d28;
   background: #f5f3ed;
   font-synthesis: none;
@@ -107,7 +109,7 @@ button:disabled {
 .hero h1,
 .hero h2 {
   margin: 0;
-  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   font-size: clamp(32px, 6vw, 52px);
   font-weight: 700;
   letter-spacing: -.045em;
@@ -129,6 +131,96 @@ button:disabled {
   box-shadow: 0 8px 26px rgb(33 49 41 / 4%);
 }
 
+.demo-panel {
+  margin: 24px 0;
+  padding: clamp(20px, 4vw, 30px);
+  border: 1px solid rgb(220 226 220 / 85%);
+  border-radius: 20px;
+  background: var(--paper);
+  box-shadow: 0 8px 26px rgb(33 49 41 / 4%);
+}
+
+.catalog-banner {
+  display: inline-block;
+  margin-top: 18px !important;
+  padding: 7px 10px;
+  border: 1px solid rgb(199 223 205 / 45%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 10%);
+  color: #e1eae2 !important;
+  font-size: 13px !important;
+}
+
+.demo-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.demo-button {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+}
+
+.demo-button:hover,
+.demo-button:focus-visible {
+  border-color: var(--green);
+  outline: 3px solid rgb(29 85 69 / 16%);
+  outline-offset: 2px;
+}
+
+.demo-button strong,
+.demo-button span {
+  display: block;
+}
+
+.demo-button span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.query-summary,
+.ranking-note {
+  margin: 14px 0;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: #f2f7f1;
+  color: #2c4236;
+  font-size: 14px;
+}
+
+.query-summary p {
+  margin: 6px 0 0;
+}
+
+.ranking-note {
+  border-left: 3px solid #78a58a;
+  background: #f7f8f4;
+}
+
+.evidence {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.evidence summary {
+  cursor: pointer;
+  color: var(--green-dark);
+  font-weight: 700;
+}
+
+.evidence ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
 .search-panel {
   padding: clamp(20px, 4vw, 32px);
 }
@@ -136,7 +228,7 @@ button:disabled {
 .search-panel h2,
 .results-panel h2 {
   margin: 0;
-  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   font-size: clamp(21px, 3vw, 27px);
   font-weight: 700;
   letter-spacing: -.03em;
@@ -307,7 +399,7 @@ a:focus-visible {
 
 .result-card h3 {
   margin: 0;
-  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   font-size: 19px;
   font-weight: 700;
   letter-spacing: -.02em;

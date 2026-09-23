@@ -1,0 +1,62 @@
+{
+  "provenance": "Сценарии вычислены из синтетического fallback-каталога profiles.jsonl после детерминированной генерации календаря.",
+  "catalog_version": "2901747339dd53cd447adee750a9ff977522ac22cf9a9a7c83cfd1e5d8eb1b78",
+  "scenarios": [
+    {
+      "id": "dense-autumn",
+      "title": "Плотная категория осенью",
+      "description": "Три карточки из плотной категории с сезонной занятостью.",
+      "request": {"city": "Алматы", "date": "2026-10-02", "event_type": "день рождения", "category": "Ведущий", "budget_kzt": 500000},
+      "expected": {"outcome": "recommended", "total_eligible": 4, "ids": ["demo-021", "demo-026", "demo-001"], "busy_excluded": 4}
+    },
+    {
+      "id": "rare-under-three",
+      "title": "Редкая категория",
+      "description": "В выдаче меньше трёх подходящих кандидатов.",
+      "request": {"city": "Алматы", "date": "2026-09-23", "event_type": "свадьба", "category": "Декоратор", "budget_kzt": 500000},
+      "expected": {"outcome": "recommended", "total_eligible": 1, "ids": ["demo-005"], "busy_excluded": 0}
+    },
+    {
+      "id": "no-eligible",
+      "title": "Кандидаты есть, но условия не проходят",
+      "description": "Нулевой бюджет исключает доступных кандидатов.",
+      "request": {"city": "Алматы", "date": "2026-09-23", "event_type": "свадьба", "category": "Ведущий", "budget_kzt": 0},
+      "expected": {"outcome": "no_eligible_candidates", "total_eligible": 0, "ids": [], "busy_excluded": 2}
+    },
+    {
+      "id": "no-category",
+      "title": "Категории нет в городе",
+      "description": "Категория есть в каталоге, но отсутствует в выбранном городе.",
+      "request": {"city": "Астана", "date": "2026-09-23", "event_type": "свадьба", "category": "Флорист", "budget_kzt": 500000},
+      "expected": {"outcome": "no_category_in_city", "total_eligible": 0, "ids": [], "busy_excluded": 0}
+    },
+    {
+      "id": "dense-date-one",
+      "title": "Плотная категория: первая дата",
+      "description": "Первая дата для сравнения занятости.",
+      "request": {"city": "Алматы", "date": "2026-09-23", "event_type": "день рождения", "category": "Ведущий", "budget_kzt": 500000},
+      "expected": {"outcome": "recommended", "total_eligible": 5, "ids": ["demo-025", "demo-021", "demo-026"], "busy_excluded": 2}
+    },
+    {
+      "id": "dense-date-two",
+      "title": "Плотная категория: вторая дата",
+      "description": "Вторая дата меняет состав выдачи и число занятых.",
+      "request": {"city": "Алматы", "date": "2026-09-24", "event_type": "день рождения", "category": "Ведущий", "budget_kzt": 500000},
+      "expected": {"outcome": "recommended", "total_eligible": 4, "ids": ["demo-021", "demo-001", "demo-024"], "busy_excluded": 3}
+    },
+    {
+      "id": "banquet-hall",
+      "title": "Подбор банкетного зала",
+      "description": "Площадка проходит тот же pipeline доступности.",
+      "request": {"city": "Алматы", "date": "2026-09-23", "event_type": "день рождения", "category": "Банкетный зал", "budget_kzt": 1800000},
+      "expected": {"outcome": "recommended", "total_eligible": 2, "ids": ["demo-006", "demo-040"], "busy_excluded": 0}
+    },
+    {
+      "id": "december-season",
+      "title": "Декабрьская сезонность",
+      "description": "Декабрьский выходной отражает плотный календарь.",
+      "request": {"city": "Алматы", "date": "2026-12-06", "event_type": "день рождения", "category": "Ведущий", "budget_kzt": 500000},
+      "expected": {"outcome": "recommended", "total_eligible": 1, "ids": ["demo-001"], "busy_excluded": 9}
+    }
+  ]
+}
