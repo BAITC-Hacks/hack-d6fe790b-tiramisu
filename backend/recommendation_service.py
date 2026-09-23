@@ -5,16 +5,17 @@ from __future__ import annotations
 import copy
 import json
 import math
-import re
 from collections import Counter
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 try:
-    from .ranking import DEFAULT_EMBEDDINGS_PATH, EMBEDDING_MODEL, RankingSnapshot, catalog_fingerprint, text_relevance, tokens
+    from .ranking import DEFAULT_EMBEDDINGS_PATH, EMBEDDING_MODEL, RankingSnapshot, catalog_fingerprint
+    from .explanations import DESCRIPTION_LABELS, description_excerpt, price_comparison
 except ImportError:
-    from ranking import DEFAULT_EMBEDDINGS_PATH, EMBEDDING_MODEL, RankingSnapshot, catalog_fingerprint, text_relevance, tokens
+    from ranking import DEFAULT_EMBEDDINGS_PATH, EMBEDDING_MODEL, RankingSnapshot, catalog_fingerprint
+    from explanations import DESCRIPTION_LABELS, description_excerpt, price_comparison
 
 DATE_MIN = date(2026, 9, 23)
 DATE_MAX = date(2026, 12, 31)
@@ -159,13 +160,8 @@ class RecommendationService:
         return {"city": payload["city"].strip(), "date": requested_date.isoformat(), "event_type": payload["event_type"].strip(), "category": payload["category"].strip(), "budget_kzt": budget, "duration_hours": duration, "language": language.strip() if language else None}, None
 
     @staticmethod
-    def _description_evidence(request: dict[str, Any], profile: dict[str, Any], peers: list[dict[str, Any]]) -> str:
-        fragments = [part.rstrip(".!? ") for part in re.split(r"(?<=[.!?])\s+", profile["description"].strip()) if part.strip(".!? ")]
-        others = set().union(*(tokens(peer["description"]) for peer in peers if peer["id"] != profile["id"]))
-        # Prefer a fragment about this format, then one that distinguishes this
-        # card from its peers. The excerpt always comes from the original text.
-        fragment = max(enumerate(fragments), key=lambda item: (text_relevance(request["event_type"], request["category"], item[1]), len(tokens(item[1]) - others), -item[0]))[1] if fragments else profile["description"].strip()
-        return fragment[:237].rstrip() + "…" if len(fragment) > 240 else fragment
+    def _description_evidence(request: dict[str, Any], profile: dict[str, Any], peers: list[dict[str, Any]]) -> str | None:
+        return description_excerpt(request, profile, peers)
 
     def _evidence(self, request: dict[str, Any], profile: dict[str, Any], peers: list[dict[str, Any]]) -> list[dict[str, str]]:
         evidence = [
@@ -181,7 +177,12 @@ class RecommendationService:
             else:
                 value = f"Запрошено {_number(request['duration_hours'])} ч; максимум {_number(profile['max_hours'])} ч"
             evidence.append({"kind": "duration", "label": "Длительность", "value": value, "source": "max_hours"})
-        evidence.append({"kind": "description", "label": "Из описания", "value": self._description_evidence(request, profile, peers), "source": "description"})
+        excerpt = self._description_evidence(request, profile, peers)
+        if excerpt:
+            evidence.append({"kind": "description", "label": "Из описания", "value": excerpt, "source": "description"})
+        comparison = price_comparison(profile, peers)
+        if comparison:
+            evidence.append({"kind": "comparison", "label": "Сравнение цены", "value": comparison, "source": "price_from_kzt"})
         return evidence
 
     @staticmethod
@@ -194,8 +195,15 @@ class RecommendationService:
                 details.append("услуга не привязана к присутствию на площадке")
             else:
                 details.append(f"запрошенные {_number(request['duration_hours'])} ч не превышают максимум {_number(profile['max_hours'])} ч")
-        fact = next(item["value"] for item in evidence if item["kind"] == "description")
-        return f"{'; '.join(details)}. В описании: «{fact}»."
+        fact = next((item["value"] for item in evidence if item["kind"] == "description"), None)
+        comparison = next((item["value"] for item in evidence if item["kind"] == "comparison"), None)
+        specific = []
+        if fact:
+            specific.append(f"{DESCRIPTION_LABELS.get(request['category'], 'В описании услуги')}: «{fact}»")
+        if comparison:
+            specific.append(comparison if not specific else comparison[0].lower() + comparison[1:])
+        explanation = f"{'; '.join(details)}."
+        return explanation + (f" {'; '.join(specific)}." if specific else "")
 
     @staticmethod
     def _summary(request: dict[str, Any], candidate_count: int, eligible_count: int, counts: dict[str, int]) -> str:
