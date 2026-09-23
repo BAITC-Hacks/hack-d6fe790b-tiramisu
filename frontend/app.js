@@ -80,9 +80,9 @@
     resultState.hidden = !title && !detail;
   }
 
-  function describeRejections(counts = {}) {
+  function describeRejections(counts = {}, eventDate = '') {
     const reasons = [
-      ['busy', 'заняты на эту дату'],
+      ['busy', eventDate ? `заняты ${eventDate}` : 'заняты на эту дату'],
       ['budget', 'не подходят по бюджету'],
       ['format', 'не работают с этим форматом'],
       ['language', 'не подходят по языку'],
@@ -143,15 +143,15 @@
     }
 
     if (data.outcome === 'no_eligible_candidates' || results.length === 0) {
-      setState('Кандидаты есть, но условиям не соответствует никто', describeRejections(counts), 'empty');
+      setState('Кандидаты есть, но условиям не соответствует никто', describeRejections(counts, data.requested?.date), 'empty');
       return;
     }
 
     for (const profile of results) appendCard(profile);
     const count = Number.isFinite(Number(data.total_eligible)) ? Number(data.total_eligible) : results.length;
     const detail = count < 3
-      ? `Нашли ${count} ${count === 1 ? 'подходящий вариант' : 'подходящих варианта'}. ${describeRejections(counts)}`
-      : 'Показаны три подходящих варианта. Объяснения основаны на условиях запроса и данных профиля.';
+      ? `Нашли ${count} ${count === 1 ? 'подходящий вариант' : 'подходящих варианта'}. ${describeRejections(counts, data.requested?.date)}`
+      : `Показаны три подходящих варианта. ${describeRejections(counts, data.requested?.date)}`;
     setState('Подобрали варианты', detail, 'success');
     if (data.degraded) {
       const note = document.createElement('p');

@@ -151,7 +151,15 @@ def _validate(payload: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | Non
     }, None
 
 
-def _explanation(request: dict[str, Any], profile: dict[str, Any], score: float, semantic: bool) -> str:
+def _description_fact(profile: dict[str, Any]) -> str:
+    description = profile["description"].strip()
+    sentence = re.split(r"(?<=[.!?])\s+", description, maxsplit=1)[0].rstrip(".!? ")
+    if len(sentence) > 160:
+        sentence = sentence[:157].rstrip() + "…"
+    return sentence
+
+
+def _explanation(request: dict[str, Any], profile: dict[str, Any]) -> str:
     reasons = []
     price = profile["price_from_kzt"]
     if price <= request["budget_kzt"]:
@@ -161,19 +169,11 @@ def _explanation(request: dict[str, Any], profile: dict[str, Any], score: float,
         reasons.append(f"работает на языке «{request['language']}»")
     if request["duration_hours"] is not None and profile["max_hours"] is not None:
         reasons.append(f"допускает до {profile['max_hours']} ч на площадке")
-    # Quote source text instead of making an ungrounded semantic claim.
-    if semantic and score >= 0.3:
-        description = profile["description"].strip()
-        first_sentence = re.split(r"(?<=[.!?])\s+", description, maxsplit=1)[0].rstrip(".!? ")
-        if first_sentence:
-            if len(first_sentence) > 140:
-                first_sentence = first_sentence[:137].rstrip() + "…"
-            reasons.append(f"в описании: «{first_sentence}»")
-    if len(reasons) < 2:
-        desc = profile["description"].strip().rstrip(".")
-        if desc:
-            reasons.append(f"в профиле указано: «{desc[:100]}{'…' if len(desc) > 100 else ''}»")
-    return "; ".join(reasons[:3]) + "."
+    matching_conditions = "; ".join(reasons)
+    description_fact = _description_fact(profile)
+    if description_fact:
+        return f"{matching_conditions.capitalize()}. В описании: «{description_fact}»."
+    return matching_conditions.capitalize() + "."
 
 
 def recommend(payload: Any) -> tuple[dict[str, Any], int]:
@@ -205,7 +205,7 @@ def recommend(payload: Any) -> tuple[dict[str, Any], int]:
     result_cards = [{
         "id": p["id"], "anon_name": p["anon_name"], "category": request["category"],
         "city": p["city"], "price_from_kzt": p["price_from_kzt"], "synthetic": bool(p["synthetic"]),
-        "explanation": _explanation(request, p, scores[p["id"]], not degraded),
+        "explanation": _explanation(request, p),
     } for p in eligible[:3]]
     return {
         "outcome": "recommended" if eligible else "no_eligible_candidates",
